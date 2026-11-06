@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta name="referrer" content="no-referrer">
+  <title>Семейный архив · Вход</title>
+  <style>
+    :root{color-scheme:light;--paper:#f5f2eb;--ink:#263c35;--muted:#6f7770;--green:#30594a;--gold:#b2955c}
+    *{box-sizing:border-box}body{margin:0;min-height:100svh;display:grid;place-items:center;background:var(--paper);color:var(--ink);font:15px/1.6 system-ui,-apple-system,sans-serif;padding:24px}
+    main{width:min(100%,440px);background:#fffdf8;border:1px solid #dcded3;border-radius:16px;padding:40px;box-shadow:0 18px 70px #263c3509}
+    .seal{width:52px;height:52px;border:1px solid var(--gold);border-radius:50%;display:grid;place-items:center;color:var(--gold);font:26px Georgia,serif;margin-bottom:28px}
+    .eyebrow{text-transform:uppercase;font-size:10px;letter-spacing:.2em;color:var(--muted)}h1{font:34px/1.15 Georgia,serif;margin:12px 0 16px}p{margin:0 0 24px;color:var(--muted)}label{display:block;font-weight:600;font-size:13px;margin-bottom:8px}
+    .input-row{position:relative}input{width:100%;padding:14px 76px 14px 14px;border:1px solid #bdc7bc;border-radius:7px;background:white;font:16px system-ui;min-width:0;color:var(--ink)}input:focus{outline:2px solid var(--gold);outline-offset:2px}
+    button{font:inherit;cursor:pointer}#toggle{position:absolute;right:7px;top:9px;border:0;background:transparent;font-size:11px;padding:8px;color:var(--muted)}#unlock{width:100%;border:0;border-radius:7px;padding:14px;margin-top:16px;background:var(--green);color:white;font-weight:600}button:disabled{opacity:.6;cursor:wait}
+    #message{font-size:13px;margin:14px 0 0;min-height:21px;color:var(--muted)}#message.error{color:#a0432f}footer{font-size:12px;color:var(--muted);border-top:1px solid #e5e5dc;margin-top:24px;padding-top:20px} @media(max-width:480px){main{padding:28px 22px}body{padding:16px}h1{font-size:30px}}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="seal" aria-hidden="true">Д</div>
+    <div class="eyebrow">Память сквозь поколения</div>
+    <h1>Семейный архив</h1>
+    <p>Родословная, фотографии и истории.<br>Доступ для семьи — по общему паролю.</p>
+    <form id="login">
+      <label for="password">Пароль семьи</label>
+      <div class="input-row"><input id="password" name="password" type="password" autocomplete="current-password" required spellcheck="false" autocapitalize="none"><button type="button" id="toggle" aria-label="Показать пароль">Показать</button></div>
+      <button id="unlock" type="submit">Открыть семейное древо</button>
+      <div id="message" role="status" aria-live="polite"></div>
+    </form>
+    <footer>Пароль можно получить у семьи. Содержимое зашифровано и открывается только на вашем устройстве.</footer>
+    <noscript>Для открытия архива включите JavaScript в браузере.</noscript>
+  </main>
+  <script>
+    'use strict';
+    const CONFIG = {"version": 1, "salt": "TBm5pneZWZY0bkw8Jz4qCHya9vUAw1jOIAeL4sMsrGA=", "iv": "m+KFpPgCq4HhtsFn", "iterations": 600000, "file": "family-tree.enc", "compression": "gzip"};
+    const field = document.querySelector('#password');
+    const message = document.querySelector('#message');
+    const submit = document.querySelector('#unlock');
+    const decode64 = value => Uint8Array.from(atob(value), char => char.charCodeAt(0));
+    document.querySelector('#toggle').onclick = event => {
+      const show = field.type === 'password';
+      field.type = show ? 'text' : 'password';
+      event.currentTarget.textContent = show ? 'Скрыть' : 'Показать';
+      event.currentTarget.setAttribute('aria-label', show ? 'Скрыть пароль' : 'Показать пароль');
+    };
+    document.querySelector('#login').onsubmit = async event => {
+      event.preventDefault();
+      if (!field.value.trim()) return;
+      submit.disabled = true; field.disabled = true; message.className = '';
+      let stage = 'download';
+      try {
+        if (!crypto.subtle || typeof DecompressionStream === 'undefined') {
+          stage = 'browser'; throw Error('unsupported');
+        }
+        message.textContent = 'Загружаем зашифрованный архив…';
+        const response = await fetch(CONFIG.file, {cache: 'no-cache', credentials: 'omit'});
+        if (!response.ok) throw Error('download');
+        const ciphertext = await response.arrayBuffer();
+        stage = 'decrypt'; message.textContent = 'Проверяем пароль и открываем древо…';
+        const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(field.value.trim()), 'PBKDF2', false, ['deriveKey']);
+        const key = await crypto.subtle.deriveKey({name:'PBKDF2',salt:decode64(CONFIG.salt),iterations:CONFIG.iterations,hash:'SHA-256'},material,{name:'AES-GCM',length:256},false,['decrypt']);
+        const compressed = await crypto.subtle.decrypt({name:'AES-GCM',iv:decode64(CONFIG.iv),additionalData:new TextEncoder().encode('family-tree-v1')},key,ciphertext);
+        stage = 'open';
+        const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip'));
+        const html = await new Response(stream).text();
+        field.value = '';
+        document.open(); document.write(html); document.close();
+      } catch (error) {
+        message.className = 'error';
+        message.textContent = stage === 'decrypt' ? 'Пароль не подошёл. Проверьте символы и попробуйте ещё раз.' : stage === 'download' ? 'Не удалось загрузить архив. Проверьте интернет и повторите.' : stage === 'browser' ? 'Откройте страницу в обновлённом Chrome, Safari, Firefox или Edge.' : 'Не удалось открыть архив. Обновите страницу и повторите.';
+        submit.disabled = false; field.disabled = false; field.focus();
+      }
+    };
+  </script>
+</body>
+</html>
